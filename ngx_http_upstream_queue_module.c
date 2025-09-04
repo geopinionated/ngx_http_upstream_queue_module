@@ -5,6 +5,7 @@
 ngx_module_t ngx_http_upstream_queue_module;
 
 typedef struct {
+    ngx_flag_t detect;
     ngx_http_upstream_peer_t peer;
     ngx_msec_t timeout;
     ngx_uint_t max;
@@ -74,21 +75,23 @@ static ngx_int_t ngx_http_upstream_queue_peer_get(ngx_peer_connection_t *pc, voi
     ngx_int_t rc = d->peer.get(pc, d->peer.data);
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "peer.get = %i", rc);
     if (rc != NGX_BUSY) return rc;
-    ngx_http_upstream_rr_peer_data_t *rrp = d->peer.data;
-    time_t now = ngx_time();
-    ngx_flag_t all_peers_down = 1;
-    for (ngx_http_upstream_rr_peer_t *peer = rrp->peers->peer; peer; peer = peer->next) {
-        if (!peer->down) {
-            if (peer->max_fails && peer->fails >= peer->max_fails && now - peer->checked <= peer->fail_timeout) continue;
-            all_peers_down = 0;
-            break;
-        }
-    }
-    if (all_peers_down) return rc;
     ngx_http_request_t *r = d->request;
     ngx_http_upstream_t *u = r->upstream;
     ngx_http_upstream_srv_conf_t *uscf = u->conf->upstream;
     ngx_http_upstream_queue_srv_conf_t *qscf = ngx_http_conf_upstream_srv_conf(uscf, ngx_http_upstream_queue_module);
+    if (qscf->detect) {
+        ngx_http_upstream_rr_peer_data_t *rrp = d->peer.data;
+        time_t now = ngx_time();
+        ngx_flag_t all_peers_down = 1;
+        for (ngx_http_upstream_rr_peer_t *peer = rrp->peers->peer; peer; peer = peer->next) {
+            if (!peer->down) {
+                if (peer->max_fails && peer->fails >= peer->max_fails && now - peer->checked <= peer->fail_timeout) continue;
+                all_peers_down = 0;
+                break;
+            }
+        }
+        if (all_peers_down) return rc;
+    }
     if (queue_size(&qscf->queue) >= qscf->max) return rc;
     if (!(pc->connection = ngx_get_connection(0, pc->log))) { ngx_log_error(NGX_LOG_ERR, pc->log, 0, "!ngx_get_connection"); return NGX_ERROR; }
     pc->connection->shared = 1;
@@ -145,6 +148,7 @@ static ngx_int_t ngx_http_upstream_queue_peer_init(ngx_http_request_t *r, ngx_ht
 
 static ngx_int_t ngx_http_upstream_queue_peer_init_upstream(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *uscf) {
     ngx_http_upstream_queue_srv_conf_t *qscf = ngx_http_conf_upstream_srv_conf(uscf, ngx_http_upstream_queue_module);
+    ngx_conf_init_value(qscf->detect, 0);
     ngx_conf_init_msec_value(qscf->timeout, 60000);
     if (qscf->peer.init_upstream(cf, uscf) != NGX_OK) { ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "init_upstream != NGX_OK"); return NGX_ERROR; }
     qscf->peer.init = uscf->peer.init;
@@ -156,6 +160,7 @@ static ngx_int_t ngx_http_upstream_queue_peer_init_upstream(ngx_conf_t *cf, ngx_
 static void *ngx_http_upstream_queue_create_srv_conf(ngx_conf_t *cf) {
     ngx_http_upstream_queue_srv_conf_t *conf;
     if (!(conf = ngx_pcalloc(cf->pool, sizeof(*conf)))) return NULL;
+    conf->detect = NGX_CONF_UNSET;
     conf->timeout = NGX_CONF_UNSET_MSEC;
     return conf;
 }
@@ -194,6 +199,7 @@ static ngx_http_module_t ngx_http_upstream_queue_ctx = {
 
 static ngx_command_t ngx_http_upstream_queue_commands[] = {
   { ngx_string("queue"), NGX_HTTP_UPS_CONF|NGX_CONF_TAKE12, ngx_http_upstream_queue_ups_conf, NGX_HTTP_SRV_CONF_OFFSET, 0, NULL },
+  { ngx_string("queue_detect_all_peer_down"), NGX_HTTP_UPS_CONF|NGX_CONF_FLAG, ngx_conf_set_flag_slot, NGX_HTTP_SRV_CONF_OFFSET, .offset = offsetof(ngx_http_upstream_queue_srv_conf_t, detect), NULL },
     ngx_null_command
 };
 
