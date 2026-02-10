@@ -1,5 +1,5 @@
 #include <ngx_http.h>
-#include "ngx_http_upstream.c"
+#include <ngx_http_upstream.h>
 #include "queue.h"
 
 ngx_module_t ngx_http_upstream_queue_module;
